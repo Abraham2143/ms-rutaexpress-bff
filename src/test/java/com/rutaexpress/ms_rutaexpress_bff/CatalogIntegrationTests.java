@@ -73,7 +73,7 @@ class CatalogIntegrationTests {
         for (String token : List.of("first-test-token", "second-test-token", "third-test-token")) {
             when(decoder.decode(token)).thenReturn(Jwt.withTokenValue(token).header("alg", "RS256")
                     .subject("user").issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(300))
-                    .claim("roles", List.of("Admin")).build());
+                    .claim("roles", List.of("ADMIN")).build());
         }
         mvc.perform(get("/api/catalog/services").header("Authorization", "Bearer first-test-token"))
                 .andExpect(status().isOk()).andExpect(content().json("{\"externalField\":true}"));

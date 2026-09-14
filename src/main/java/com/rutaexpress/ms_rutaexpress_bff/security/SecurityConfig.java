@@ -29,13 +29,23 @@ public class SecurityConfig {
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/catalog/services").authenticated()
-                        .requestMatchers(HttpMethod.POST, "/api/catalog/services").hasRole("Admin")
-                        .requestMatchers(HttpMethod.PUT, "/api/catalog/services/*").hasRole("Admin")
-                        .requestMatchers(HttpMethod.POST, "/api/shipments").hasAnyRole("Cliente", "Admin")
-                        .requestMatchers(HttpMethod.PUT, "/api/shipments/*/status").hasAnyRole("Operador", "Admin")
+
+                        // Catalog
+                        .requestMatchers(HttpMethod.GET, "/api/catalog/services")
+                        .hasAnyRole("CLIENT", "DISPATCHER", "ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/api/catalog/services")
+                        .hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/catalog/services/*")
+                        .hasRole("ADMIN")
+
+                        // Shipments
+                        .requestMatchers(HttpMethod.POST, "/api/shipments")
+                        .hasAnyRole("CLIENT", "ADMIN")
+                        .requestMatchers(HttpMethod.PUT, "/api/shipments/*/status")
+                        .hasAnyRole("DISPATCHER", "ADMIN")
                         .requestMatchers(HttpMethod.GET, "/api/shipments", "/api/shipments/*")
-                            .hasAnyRole("Admin", "Operador", "Cliente", "Auditor")
+                        .hasAnyRole("ADMIN", "DISPATCHER", "CLIENT", "AUDITOR")
+
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(roles)))
                 .build();
