@@ -1,1 +1,323 @@
 # ms-rutaexpress-bff
+
+BFF de la primera entrega. Java 21, Spring Boot 4.1.1, Maven.
+Conserva artifact, group y package originales (`com.rutaexpress.ms_rutaexpress_bff`),
+según la regla de no cambiarlos en README.AGENT.md. La estructura `cl.rutaexpress.bff`
+del mismo documento es inconsistente con el proyecto inicial y no se aplicó.
+
+Angular :4200 → BFF :8080 → HTTP → Shipments :8081 / Catalog :8082.
+No hay persistencia ni lógica de dominio. Los otros proyectos no fueron inspeccionados.
+
+## Dependencias y transporte
+
+La preparación para AWS agrega `spring-boot-starter-actuator` para el health check del ALB.
+
+Las dependencias existentes cubren Web MVC, RestClient, Security, OAuth2 Resource Server,
+Validation y pruebas. No fue necesario modificar pom.xml.
+Se usa RestClient con el cliente HTTP de Java, timeouts configurables y sin redirecciones
+ni reintentos automáticos (evita reenviar credenciales a otro host o duplicar escrituras).
+Referencia: https://docs.spring.io/spring-framework/reference/web/webmvc-client.html
+
+## Endpoints
+
+Las rutas expuestas por el BFF son iguales a las rutas downstream:
+
+| Método | Ruta BFF y downstream | Servicio | Autorización |
+|---|---|---|---|
+| POST | /api/shipments | Shipments | Cliente o Admin |
+| GET | /api/shipments/{id} | Shipments | Admin, Operador, Cliente o Auditor |
+| PUT | /api/shipments/{id}/status | Shipments | Operador o Admin |
+| GET | /api/shipments?status=...&from=...&to=... | Shipments | Admin, Operador, Cliente o Auditor |
+| GET | /api/catalog/services | Catalog | Cualquier JWT válido |
+| POST | /api/catalog/services | Catalog | Admin |
+| PUT | /api/catalog/services/{id} | Catalog | Admin |
+
+Filtros opcionales: se envían sólo cuando están presentes, codificados como parámetros.
+El formato de fechas y los valores de status los valida Shipments.
+No se implementa GET /api/catalog/services/{id}: es opcional y no está confirmado.
+Las rutas no autorizadas explícitamente se deniegan.
+
+## Variables de entorno
+
+| Variable | Default / requisito |
+|---|---|
+| SHIPMENTS_BASE_URL | http://localhost:8081 |
+| CATALOG_BASE_URL | http://localhost:8082 |
+| AZURE_ISSUER_URI | Obligatoria: issuer exacto del tenant/API |
+| AZURE_AUDIENCE | Obligatoria: audience exacta que debe tener el access token del BFF |
+| CORS_ALLOWED_ORIGINS | http://localhost:4200; varias separadas por coma |
+| SERVER_PORT | 8080 |
+| DOWNSTREAM_CONNECT_TIMEOUT | 3s |
+| DOWNSTREAM_READ_TIMEOUT | 10s |
+
+No se guardan secretos. Configurar URLs HTTPS en entornos que lo requieran.
+AZURE_AUDIENCE no es una URL que el BFF consulte: es el valor esperado de `aud`.
+Usar el valor emitido para la API registrada; por ejemplo `api://<API_CLIENT_ID>`
+si ése es el contrato de tokens. No confundirlo con el client ID de Angular.
+Los timeouts deben ser positivos. Las URLs no pueden incluir credenciales, query ni fragmento.
+
+## JWT y roles
+
+Spring Security funciona como OAuth2 Resource Server stateless.
+Nimbus verifica firma con las claves descubiertas desde el issuer, issuer, vigencia y audience.
+El descubrimiento se realiza al procesar el primer token; iniciar el contexto no requiere
+contactar Entra. El issuer y la audience sí deben estar configurados.
+No hay login local, sesiones, tokens de desarrollo ni bypass de seguridad.
+
+El claim `roles: ["Admin"]` se transforma en `ROLE_Admin`.
+Los nombres son sensibles a mayúsculas: Admin, Operador, Cliente, Auditor.
+No se convierten scopes en roles ni se infieren permisos de dominio o pertenencia.
+
+Cada controller recibe el Jwt ya autenticado y pasa `getTokenValue()` como argumento
+local al client. Éste coloca `Authorization: Bearer <token>` exclusivamente en esa
+petición. No se almacena el token en campos ni se registra en logs.
+Se propaga en todas las llamadas a los servicios configurados.
+
+**Condición de integración:** Shipments y Catalog deben aceptar ese mismo token
+(issuer/audience/permisos compatibles). Si cada servicio exige su propia audience,
+el reenvío directo no sirve y habrá que acordar otro flujo, por ejemplo OBO.
+No se implementó intercambio de tokens porque está fuera del contrato solicitado.
+
+CSRF está desactivado para esta API que autentica mediante Authorization, sin cookies.
+CORS permite GET/POST/PUT/OPTIONS y headers Authorization/Content-Type/Accept.
+Los preflight del origen permitido no requieren JWT. No se permiten comodines ni credenciales
+de cookies. Se exponen ETag y Retry-After.
+
+## DTOs y contratos pendientes
+
+README.AGENT.md documenta métodos y rutas, pero **no publica los campos JSON** de solicitudes
+ni respuestas, tipos de identificadores, enums de status o formato de listas/paginación.
+
+ShipmentDto y CatalogServiceDto son DTOs de transporte basados en objetos JSON abiertos.
+Se usan para creación/actualización y conservan campos desconocidos; no inventan campos
+obligatorios, transiciones ni validaciones de negocio. Se rechaza JSON mal formado.
+Las respuestas se transportan como bytes, manteniendo el cuerpo original incluso si la lista
+es un array o una página. Esta decisión evita asumir un esquema externo que no está disponible.
+Cuando se publiquen los esquemas, se podrán tipar los campos y añadir validaciones estructurales.
+La dependencia Validation está disponible, pero no se inventaron restricciones de dominio.
+
+Pendiente de verificar con los responsables externos:
+
+- Existencia real de los siete endpoints documentados y sus esquemas JSON.
+- Formato de status/from/to, IDs y posibles contratos de paginación.
+- Compatibilidad del issuer/audience y roles de los tres servicios.
+- GET de Catalog por ID, antes de exponerlo.
+
+No se afirma que falte ningún endpoint en los otros repositorios: no fueron consultados.
+Si un servicio responde 404, se devuelve ese 404; no hay datos simulados ni fallback local.
+
+## Respuestas y errores
+
+Se mantienen status y cuerpos downstream, incluyendo 201, 204, 400, 401, 403, 404 y 5xx.
+Se propagan Content-Type, ETag, Last-Modified y Retry-After en éxito;
+Content-Type y Retry-After en errores HTTP.
+No se copian headers de sesión, CORS ni conexión del downstream.
+Location no se publica mientras no exista un contrato para reescribir URLs externas al BFF.
+
+Errores de conexión/timeout → 503 con ProblemDetail estable.
+Otros errores de transporte y redirecciones inesperadas → 502.
+Los mensajes locales no exponen URLs internas ni excepciones.
+Los cuerpos de error HTTP del downstream se conservan; éste es responsable de no incluir secretos.
+Errores de autenticación/autorización del BFF → 401/403 sin llamar al downstream.
+
+## Ejecución local
+
+### Despliegue EC2 detrás de API Gateway y ALB
+
+Validación de esta etapa: `./mvnw clean test` y `./mvnw clean package` (ejecutados
+como `.\mvnw.cmd` en Windows) finalizaron con BUILD SUCCESS: 49 pruebas, 0 fallos,
+0 errores y 0 omitidas. Incluyen HTTP real contra un stub local para verificar
+`CATALOG_BASE_URL`, las tres operaciones y propagación del token por request;
+además verifican health público y mínimo y bloqueo de otras rutas Actuator.
+Se utilizó el JDK local 26 con `--release 21`; Docker mantiene Java 21.
+No se ejecutó una integración contra las EC2 ni se validó la imagen Docker en esta etapa.
+
+Flujo: Angular → API Gateway → ALB → BFF (EC2, puerto 8080) → Catalog
+(otra EC2, puerto 8082). El código no requiere SDK AWS, base de datos ni variables DB_*.
+Dockerfile se conserva con Java 21 y el puerto 8080.
+
+Configurar en la EC2 del BFF (sintaxis Bash, reemplazar placeholders):
+
+```sh
+docker build -t ms-rutaexpress-bff .
+docker run -d --name ms-rutaexpress-bff --restart unless-stopped \
+  -p 8080:8080 \
+  -e AZURE_ISSUER_URI="https://login.microsoftonline.com/<TENANT_ID>/v2.0" \
+  -e AZURE_AUDIENCE="<AUDIENCE_REAL_DE_LA_API>" \
+  -e CATALOG_BASE_URL="http://<IP-PRIVADA-CATALOG>:8082" \
+  -e CORS_ALLOWED_ORIGINS="https://<DOMINIO-ANGULAR>" \
+  ms-rutaexpress-bff
+```
+
+Issuer y audience son obligatorios. Catalog conserva fallback `http://localhost:8082`
+para desarrollo; en EC2 se debe proporcionar su URL privada. CORS acepta varios
+orígenes separados por coma y conserva `http://localhost:4200` como fallback.
+`SHIPMENTS_BASE_URL` sigue disponible, pero Catalog y el health check no dependen de Shipments.
+
+Configurar el target group del ALB con HTTP, puerto 8080, health check GET
+`/actuator/health`, success code **200**. El endpoint no requiere JWT y devuelve
+`{"status":"UP"}` cuando el BFF está saludable; estados DOWN/OUT_OF_SERVICE devuelven
+503. No expone detalles, componentes, grupos de probes ni otros endpoints Actuator.
+El chequeo refleja el estado local del BFF, no valida conectividad con Catalog ni Entra.
+No envía tokens ni llama a los servicios downstream.
+
+La EC2 del BFF debe aceptar TCP 8080 desde el security group del ALB; Catalog debe
+aceptar TCP 8082 desde el security group del BFF. Permitir la conectividad de salida
+necesaria hacia Catalog y HTTPS/DNS hacia Entra para descubrimiento y claves JWT.
+API Gateway/ALB deben conservar `Authorization` y entregar al BFF las rutas
+`/api/catalog/services` y `/api/catalog/services/{id}` sin prefijos de stage añadidos.
+Si API Gateway gestiona CORS, alinear sus orígenes/headers con el BFF y permitir preflight.
+
+Se conservan los roles actuales, sensibles a mayúsculas: `Admin`, `Operador`, `Cliente`,
+`Auditor`. Los nombres `ADMIN`, `DISPATCHER`, `CLIENT` mencionados para AWS no son
+equivalencias automáticas. Confirmar los valores reales de app roles en Entra antes
+del despliegue: las escrituras de Catalog requieren `Admin`; su GET requiere JWT válido.
+No se amplían permisos ni se cambia el token enviado a Catalog.
+
+El esquema JSON externo de Catalog no está publicado en este repositorio. Se conserva
+CatalogServiceDto y el transporte existentes; no se inventan campos. La integración real
+queda sujeta a confirmar el esquema y que Catalog acepte el mismo issuer/audience/token.
+El BFF no usa client secret ni intercambia tokens. No se modificaron otros repositorios
+ni se crearon recursos AWS desde esta entrega.
+
+Verificación manual después de desplegar:
+
+```sh
+curl -i http://localhost:8080/actuator/health
+# Esperado: 200 y {"status":"UP"}
+curl -i http://localhost:8080/api/catalog/services
+# Esperado: 401
+curl -i https://<URL-API-GATEWAY>/api/catalog/services -H "Authorization: Bearer $ACCESS_TOKEN"
+# ACCESS_TOKEN debe ser un token real válido para BFF y Catalog.
+```
+
+Referencias: [health checks ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html),
+[security groups ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-update-security-groups.html),
+[prefijos de stage en integraciones privadas REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/private-integration.html),
+[Actuator health](https://docs.spring.io/spring-boot/api/rest/actuator/health.html).
+
+### Docker
+
+El Dockerfile multi-stage construye y ejecuta las pruebas con Maven 3 y JDK 21
+(`maven:3-eclipse-temurin-21`). El runtime usa `eclipse-temurin:21-jre-alpine`,
+copia únicamente el JAR de la aplicación y ejecuta `java -jar` como usuario no root.
+Requiere Docker con contenedores Linux. No requiere Maven ni Java instalados en el host.
+Las imágenes base usan tags actualizables dentro de esas versiones mayores.
+
+```sh
+docker build -t ms-rutaexpress-bff .
+docker run --rm \
+  -p 8080:8080 \
+  -e AZURE_ISSUER_URI="https://login.microsoftonline.com/<TENANT_ID>/v2.0" \
+  -e AZURE_AUDIENCE="<AUDIENCE_REAL_DE_LA_API>" \
+  -e SHIPMENTS_BASE_URL="http://host.docker.internal:8081" \
+  -e CATALOG_BASE_URL="http://host.docker.internal:8082" \
+  -e CORS_ALLOWED_ORIGINS="http://localhost:4200" \
+  ms-rutaexpress-bff
+```
+
+El ejemplo usa sintaxis Bash; en PowerShell ejecutar en una línea o sustituir
+las continuaciones `\` por acentos graves. Sustituir los placeholders por valores reales.
+`AZURE_ISSUER_URI` y `AZURE_AUDIENCE` son obligatorias; las URLs downstream y CORS
+se reciben por las variables existentes. No se incorporan valores de entorno en la imagen.
+El contenedor necesita conectividad hacia Entra y hacia las URLs downstream.
+
+`host.docker.internal` permite acceder a servicios ejecutados en el host con Docker Desktop.
+En Docker Engine Linux se puede añadir `--add-host=host.docker.internal:host-gateway`.
+Dentro del contenedor, `localhost` apunta al propio BFF.
+
+Cuando los servicios compartan una red Docker, configurar
+`SHIPMENTS_BASE_URL=http://shipments:8081` y `CATALOG_BASE_URL=http://catalog:8082`.
+Los nombres `shipments` y `catalog` deben ser nombres o aliases de esa red; con
+`docker run` se selecciona usando `--network <red>`. En un futuro Compose serán los
+nombres de los servicios de la red compartida. CORS conserva el origen del navegador
+Angular, por ejemplo `http://localhost:4200`, no el nombre interno de su contenedor.
+No se incluye Compose en esta entrega.
+
+JWT, roles, OAuth2 Resource Server, audience y propagación Bearer se mantienen intactos.
+No hay base de datos ni configuración Oracle. `.dockerignore` limita el contexto a
+`pom.xml` y `src`, excluyendo Git, IDE, artefactos locales y archivos de credenciales.
+
+Validación de Docker (2026-09-14): `mvn clean test` y `mvn clean package` finalizaron
+con BUILD SUCCESS, 42 pruebas sin fallos ni errores. Se usó el JDK 26 instalado con
+`--release 21`; el Dockerfile selecciona Java 21 en ambas etapas. Se intentó
+`docker build -t ms-rutaexpress-bff .`, pero el comando `docker` no está disponible
+en este entorno. La construcción y ejecución real de la imagen quedan pendientes
+de validar en un equipo con Docker.
+
+### Sin contenedor
+
+Requiere JDK 21 y Maven o el wrapper incluido. En PowerShell:
+
+```powershell
+$env:AZURE_ISSUER_URI = 'https://login.microsoftonline.com/<TENANT_ID>/v2.0'
+$env:AZURE_AUDIENCE = '<AUDIENCE_REAL_DE_LA_API>'
+$env:SHIPMENTS_BASE_URL = 'http://localhost:8081'
+$env:CATALOG_BASE_URL = 'http://localhost:8082'
+$env:CORS_ALLOWED_ORIGINS = 'http://localhost:4200'
+.\mvnw.cmd spring-boot:run
+```
+
+Los placeholders se sustituyen por la configuración de Entra.
+Ejecutar cada servicio externo en su propio proyecto. El BFF no necesita esos proyectos
+en su workspace y las pruebas no requieren servicios externos ni credenciales de Azure.
+
+## Ejemplos de requests
+
+Obtener un access token real para esta API con el rol correspondiente y asignarlo a
+`$env:ACCESS_TOKEN` en la consola local (no guardarlo en archivos del repositorio).
+
+```powershell
+curl.exe -i 'http://localhost:8080/api/catalog/services' -H "Authorization: Bearer $env:ACCESS_TOKEN"
+curl.exe -i 'http://localhost:8080/api/shipments/42' -H "Authorization: Bearer $env:ACCESS_TOKEN"
+curl.exe -i 'http://localhost:8080/api/shipments?status=VALOR_DEL_CONTRATO&from=2026-09-01&to=2026-09-13' -H "Authorization: Bearer $env:ACCESS_TOKEN"
+curl.exe -i -X POST 'http://localhost:8080/api/shipments' -H "Authorization: Bearer $env:ACCESS_TOKEN" -H 'Content-Type: application/json' --data-binary '@shipment.json'
+curl.exe -i -X PUT 'http://localhost:8080/api/shipments/42/status' -H "Authorization: Bearer $env:ACCESS_TOKEN" -H 'Content-Type: application/json' --data-binary '@shipment-status.json'
+curl.exe -i -X POST 'http://localhost:8080/api/catalog/services' -H "Authorization: Bearer $env:ACCESS_TOKEN" -H 'Content-Type: application/json' --data-binary '@catalog-service.json'
+curl.exe -i -X PUT 'http://localhost:8080/api/catalog/services/7' -H "Authorization: Bearer $env:ACCESS_TOKEN" -H 'Content-Type: application/json' --data-binary '@catalog-service.json'
+```
+
+Los archivos JSON de estos ejemplos deben contener payloads válidos publicados por los servicios;
+no se incluyen ejemplos de campos inventados.
+
+## Pruebas y build
+
+```powershell
+mvn clean test
+mvn clean package
+# Equivalentes sin Maven en PATH:
+.\mvnw.cmd clean test
+.\mvnw.cmd clean package
+```
+
+Pruebas: contexto completo, filtro Bearer con decoder mockeado, 401/403, matriz de roles,
+controllers, CORS, JWT validators y clientes RestClient con MockRestServiceServer.
+Verifican métodos, rutas, filtros, cuerpos, tokens por request y errores HTTP/disponibilidad.
+No prueban la conectividad real con Entra ni los contratos no publicados.
+
+Verificación de esta entrega: `mvn clean test` y `mvn clean package`: BUILD SUCCESS,
+42 pruebas, 0 fallos, 0 errores, 0 omitidas en ambos comandos.
+El entorno tenía JAVA_HOME incorrecto y Maven fuera del PATH; se usó la distribución
+Maven 3.9.16 del wrapper ajustando sólo el entorno del proceso. El JDK instalado es
+26.0.2.1 y el compilador mantuvo `--release 21`. No se ejecutaron las pruebas sobre
+un runtime JDK 21; esa verificación queda pendiente del entorno de entrega.
+Artefacto: `target/ms-rutaexpress-bff-0.0.1-SNAPSHOT.jar`.
+
+## Archivos de la entrega
+
+Creados bajo `src/main/java/com/rutaexpress/ms_rutaexpress_bff/`:
+
+- `client/DownstreamHttp.java`, `client/ShipmentsClient.java`, `client/CatalogClient.java`.
+- `config/HttpClientConfig.java`.
+- `controller/ShipmentBffController.java`, `controller/CatalogBffController.java`.
+- `dto/ShipmentDto.java`, `dto/CatalogServiceDto.java`.
+- `exception/DownstreamExceptionHandler.java`.
+- `security/SecurityConfig.java`.
+
+Creados bajo `src/test/java/com/rutaexpress/ms_rutaexpress_bff/`:
+
+- `BffSecurityTests.java`, `client/ClientsTests.java`, `security/SecurityConfigTests.java`.
+
+Modificados: `README.md`, `src/main/resources/application.properties` y
+`src/test/java/com/rutaexpress/ms_rutaexpress_bff/MsRutaexpressBffApplicationTests.java`.
+`pom.xml`, la clase de arranque y `README.AGENT.md` se conservaron sin cambios.

@@ -1,0 +1,15 @@
+# Only Maven inputs enter the build context.
+**
+!pom.xml
+!src/
+!src/**
+# Never include local credentials or generated files within src either.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/target/
+**/*.log
