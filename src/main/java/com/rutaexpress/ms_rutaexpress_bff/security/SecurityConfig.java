@@ -28,6 +28,7 @@ public class SecurityConfig {
                 .csrf(config -> config.disable())
                 .sessionManagement(config -> config.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.GET, "/actuator/health").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/catalog/services").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/catalog/services").hasRole("Admin")
                         .requestMatchers(HttpMethod.PUT, "/api/catalog/services/*").hasRole("Admin")

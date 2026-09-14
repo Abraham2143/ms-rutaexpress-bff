@@ -10,6 +10,8 @@ No hay persistencia ni lógica de dominio. Los otros proyectos no fueron inspecc
 
 ## Dependencias y transporte
 
+La preparación para AWS agrega `spring-boot-starter-actuator` para el health check del ALB.
+
 Las dependencias existentes cubren Web MVC, RestClient, Security, OAuth2 Resource Server,
 Validation y pruebas. No fue necesario modificar pom.xml.
 Se usa RestClient con el cliente HTTP de Java, timeouts configurables y sin redirecciones
@@ -119,6 +121,80 @@ Los cuerpos de error HTTP del downstream se conservan; éste es responsable de n
 Errores de autenticación/autorización del BFF → 401/403 sin llamar al downstream.
 
 ## Ejecución local
+
+### Despliegue EC2 detrás de API Gateway y ALB
+
+Validación de esta etapa: `./mvnw clean test` y `./mvnw clean package` (ejecutados
+como `.\mvnw.cmd` en Windows) finalizaron con BUILD SUCCESS: 49 pruebas, 0 fallos,
+0 errores y 0 omitidas. Incluyen HTTP real contra un stub local para verificar
+`CATALOG_BASE_URL`, las tres operaciones y propagación del token por request;
+además verifican health público y mínimo y bloqueo de otras rutas Actuator.
+Se utilizó el JDK local 26 con `--release 21`; Docker mantiene Java 21.
+No se ejecutó una integración contra las EC2 ni se validó la imagen Docker en esta etapa.
+
+Flujo: Angular → API Gateway → ALB → BFF (EC2, puerto 8080) → Catalog
+(otra EC2, puerto 8082). El código no requiere SDK AWS, base de datos ni variables DB_*.
+Dockerfile se conserva con Java 21 y el puerto 8080.
+
+Configurar en la EC2 del BFF (sintaxis Bash, reemplazar placeholders):
+
+```sh
+docker build -t ms-rutaexpress-bff .
+docker run -d --name ms-rutaexpress-bff --restart unless-stopped \
+  -p 8080:8080 \
+  -e AZURE_ISSUER_URI="https://login.microsoftonline.com/<TENANT_ID>/v2.0" \
+  -e AZURE_AUDIENCE="<AUDIENCE_REAL_DE_LA_API>" \
+  -e CATALOG_BASE_URL="http://<IP-PRIVADA-CATALOG>:8082" \
+  -e CORS_ALLOWED_ORIGINS="https://<DOMINIO-ANGULAR>" \
+  ms-rutaexpress-bff
+```
+
+Issuer y audience son obligatorios. Catalog conserva fallback `http://localhost:8082`
+para desarrollo; en EC2 se debe proporcionar su URL privada. CORS acepta varios
+orígenes separados por coma y conserva `http://localhost:4200` como fallback.
+`SHIPMENTS_BASE_URL` sigue disponible, pero Catalog y el health check no dependen de Shipments.
+
+Configurar el target group del ALB con HTTP, puerto 8080, health check GET
+`/actuator/health`, success code **200**. El endpoint no requiere JWT y devuelve
+`{"status":"UP"}` cuando el BFF está saludable; estados DOWN/OUT_OF_SERVICE devuelven
+503. No expone detalles, componentes, grupos de probes ni otros endpoints Actuator.
+El chequeo refleja el estado local del BFF, no valida conectividad con Catalog ni Entra.
+No envía tokens ni llama a los servicios downstream.
+
+La EC2 del BFF debe aceptar TCP 8080 desde el security group del ALB; Catalog debe
+aceptar TCP 8082 desde el security group del BFF. Permitir la conectividad de salida
+necesaria hacia Catalog y HTTPS/DNS hacia Entra para descubrimiento y claves JWT.
+API Gateway/ALB deben conservar `Authorization` y entregar al BFF las rutas
+`/api/catalog/services` y `/api/catalog/services/{id}` sin prefijos de stage añadidos.
+Si API Gateway gestiona CORS, alinear sus orígenes/headers con el BFF y permitir preflight.
+
+Se conservan los roles actuales, sensibles a mayúsculas: `Admin`, `Operador`, `Cliente`,
+`Auditor`. Los nombres `ADMIN`, `DISPATCHER`, `CLIENT` mencionados para AWS no son
+equivalencias automáticas. Confirmar los valores reales de app roles en Entra antes
+del despliegue: las escrituras de Catalog requieren `Admin`; su GET requiere JWT válido.
+No se amplían permisos ni se cambia el token enviado a Catalog.
+
+El esquema JSON externo de Catalog no está publicado en este repositorio. Se conserva
+CatalogServiceDto y el transporte existentes; no se inventan campos. La integración real
+queda sujeta a confirmar el esquema y que Catalog acepte el mismo issuer/audience/token.
+El BFF no usa client secret ni intercambia tokens. No se modificaron otros repositorios
+ni se crearon recursos AWS desde esta entrega.
+
+Verificación manual después de desplegar:
+
+```sh
+curl -i http://localhost:8080/actuator/health
+# Esperado: 200 y {"status":"UP"}
+curl -i http://localhost:8080/api/catalog/services
+# Esperado: 401
+curl -i https://<URL-API-GATEWAY>/api/catalog/services -H "Authorization: Bearer $ACCESS_TOKEN"
+# ACCESS_TOKEN debe ser un token real válido para BFF y Catalog.
+```
+
+Referencias: [health checks ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/target-group-health-checks.html),
+[security groups ALB](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-update-security-groups.html),
+[prefijos de stage en integraciones privadas REST API](https://docs.aws.amazon.com/apigateway/latest/developerguide/private-integration.html),
+[Actuator health](https://docs.spring.io/spring-boot/api/rest/actuator/health.html).
 
 ### Docker
 

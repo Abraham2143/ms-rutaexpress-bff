@@ -33,8 +33,25 @@ class BffSecurityTests {
             .expiresAt(Instant.now().plusSeconds(300)).claim("roles",List.of(roles)).build());
     }
     @Test void noJwt() throws Exception {
+        mvc.perform(get("/api/catalog/services")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/shipments")).andExpect(status().isUnauthorized());
         verifyNoInteractions(shipments,catalog);
+    }
+    @Test void healthIsPublicAndMinimal() throws Exception {
+        mvc.perform(get("/actuator/health")).andExpect(status().isOk())
+            .andExpect(content().json("{\"status\":\"UP\"}", org.springframework.test.json.JsonCompareMode.STRICT));
+        verifyNoInteractions(decoder, shipments, catalog);
+    }
+    @ParameterizedTest
+    @ValueSource(strings={"/actuator", "/actuator/env", "/actuator/info", "/actuator/health/diskSpace"})
+    void otherActuatorPathsAreNotPublic(String path) throws Exception {
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        token("Admin");
+        mvc.perform(get(path).header("Authorization", "Bearer test-token"))
+            .andExpect(status().isForbidden());
+    }
+    @Test void healthWriteIsNotPublic() throws Exception {
+        mvc.perform(post("/actuator/health")).andExpect(status().isUnauthorized());
     }
     @Test void badJwt() throws Exception {
         when(decoder.decode("bad")).thenThrow(new BadJwtException("invalid"));
