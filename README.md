@@ -120,6 +120,57 @@ Errores de autenticación/autorización del BFF → 401/403 sin llamar al downst
 
 ## Ejecución local
 
+### Docker
+
+El Dockerfile multi-stage construye y ejecuta las pruebas con Maven 3 y JDK 21
+(`maven:3-eclipse-temurin-21`). El runtime usa `eclipse-temurin:21-jre-alpine`,
+copia únicamente el JAR de la aplicación y ejecuta `java -jar` como usuario no root.
+Requiere Docker con contenedores Linux. No requiere Maven ni Java instalados en el host.
+Las imágenes base usan tags actualizables dentro de esas versiones mayores.
+
+```sh
+docker build -t ms-rutaexpress-bff .
+docker run --rm \
+  -p 8080:8080 \
+  -e AZURE_ISSUER_URI="https://login.microsoftonline.com/<TENANT_ID>/v2.0" \
+  -e AZURE_AUDIENCE="<AUDIENCE_REAL_DE_LA_API>" \
+  -e SHIPMENTS_BASE_URL="http://host.docker.internal:8081" \
+  -e CATALOG_BASE_URL="http://host.docker.internal:8082" \
+  -e CORS_ALLOWED_ORIGINS="http://localhost:4200" \
+  ms-rutaexpress-bff
+```
+
+El ejemplo usa sintaxis Bash; en PowerShell ejecutar en una línea o sustituir
+las continuaciones `\` por acentos graves. Sustituir los placeholders por valores reales.
+`AZURE_ISSUER_URI` y `AZURE_AUDIENCE` son obligatorias; las URLs downstream y CORS
+se reciben por las variables existentes. No se incorporan valores de entorno en la imagen.
+El contenedor necesita conectividad hacia Entra y hacia las URLs downstream.
+
+`host.docker.internal` permite acceder a servicios ejecutados en el host con Docker Desktop.
+En Docker Engine Linux se puede añadir `--add-host=host.docker.internal:host-gateway`.
+Dentro del contenedor, `localhost` apunta al propio BFF.
+
+Cuando los servicios compartan una red Docker, configurar
+`SHIPMENTS_BASE_URL=http://shipments:8081` y `CATALOG_BASE_URL=http://catalog:8082`.
+Los nombres `shipments` y `catalog` deben ser nombres o aliases de esa red; con
+`docker run` se selecciona usando `--network <red>`. En un futuro Compose serán los
+nombres de los servicios de la red compartida. CORS conserva el origen del navegador
+Angular, por ejemplo `http://localhost:4200`, no el nombre interno de su contenedor.
+No se incluye Compose en esta entrega.
+
+JWT, roles, OAuth2 Resource Server, audience y propagación Bearer se mantienen intactos.
+No hay base de datos ni configuración Oracle. `.dockerignore` limita el contexto a
+`pom.xml` y `src`, excluyendo Git, IDE, artefactos locales y archivos de credenciales.
+
+Validación de Docker (2026-09-14): `mvn clean test` y `mvn clean package` finalizaron
+con BUILD SUCCESS, 42 pruebas sin fallos ni errores. Se usó el JDK 26 instalado con
+`--release 21`; el Dockerfile selecciona Java 21 en ambas etapas. Se intentó
+`docker build -t ms-rutaexpress-bff .`, pero el comando `docker` no está disponible
+en este entorno. La construcción y ejecución real de la imagen quedan pendientes
+de validar en un equipo con Docker.
+
+### Sin contenedor
+
 Requiere JDK 21 y Maven o el wrapper incluido. En PowerShell:
 
 ```powershell
