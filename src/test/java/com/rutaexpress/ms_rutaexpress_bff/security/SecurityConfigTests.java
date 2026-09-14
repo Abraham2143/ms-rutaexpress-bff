@@ -8,11 +8,12 @@ class SecurityConfigTests {
     Jwt jwt(String issuer,String audience,Instant expiry) {
         return Jwt.withTokenValue("test-only").header("alg","RS256").subject("user")
             .issuer(issuer).audience(List.of(audience)).issuedAt(Instant.now().minusSeconds(600))
-            .expiresAt(expiry).claim("roles",List.of("Admin","Auditor")).build();
+            .expiresAt(expiry).claim("roles",List.of("ADMIN","DISPATCHER","CLIENT","AUDITOR")).build();
     }
     @Test void roles() {
         var result=new SecurityConfig().jwtAuthenticationConverter().convert(jwt("https://issuer.test","api://bff",Instant.now().plusSeconds(300)));
-        assertThat(result.getAuthorities()).extracting("authority").contains("ROLE_Admin","ROLE_Auditor");
+        assertThat(result.getAuthorities()).extracting("authority")
+            .contains("ROLE_ADMIN","ROLE_DISPATCHER","ROLE_CLIENT","ROLE_AUDITOR");
     }
     @Test void audience() {
         var validator=SecurityConfig.audienceValidator("api://bff");
