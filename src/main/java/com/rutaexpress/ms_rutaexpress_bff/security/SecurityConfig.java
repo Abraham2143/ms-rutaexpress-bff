@@ -1,5 +1,6 @@
 package com.rutaexpress.ms_rutaexpress_bff.security;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
@@ -18,10 +19,11 @@ import org.springframework.web.cors.*;
 
 @Configuration
 public class SecurityConfig {
+
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http,
-            JwtAuthenticationConverter roles,
-            @Qualifier("corsConfigurationSource") CorsConfigurationSource cors) throws Exception {
+                                            JwtAuthenticationConverter roles,
+                                            @Qualifier("corsConfigurationSource") CorsConfigurationSource cors) throws Exception {
         return http
                 .cors(config -> config.configurationSource(cors))
                 // The API uses only Authorization Bearer, never cookie/session authentication.
@@ -81,26 +83,40 @@ public class SecurityConfig {
         return token -> token.getAudience() != null && token.getAudience().contains(audience)
                 ? OAuth2TokenValidatorResult.success()
                 : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token",
-                        "Token audience does not match this API", null));
+                "Token audience does not match this API", null));
     }
 
     @Bean
     CorsConfigurationSource corsConfigurationSource(
-            @Value("${rutaexpress.cors.allowed-origins}") String allowedOrigins) {
-        var origins = Arrays.stream(allowedOrigins.split(",")).map(String::trim)
-                .filter(value -> !value.isEmpty()).toList();
-        if (origins.isEmpty() || origins.stream().anyMatch(value -> value.contains("*"))) {
+            @Value("${rutaexpress.cors.allowed-origins:http://localhost:4200}") String allowedOrigins) {
+        if (allowedOrigins == null || allowedOrigins.isBlank() || allowedOrigins.contains("*")) {
             throw new IllegalArgumentException("CORS requires explicit allowed origins");
         }
+
+        var origins = new ArrayList<>(Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList());
+
+        if (origins.isEmpty()) {
+            throw new IllegalArgumentException("CORS requires explicit allowed origins");
+        }
+
+        // Permitir explícitamente el origen de tu frontend en Amplify
+        if (!origins.contains("https://development.dg7gy8jk7nc8g.amplifyapp.com")) {
+            origins.add("https://development.dg7gy8jk7nc8g.amplifyapp.com");
+        }
+
         var config = new CorsConfiguration();
         config.setAllowedOrigins(origins);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
         config.setExposedHeaders(List.of("ETag", "Retry-After"));
         config.setAllowCredentials(false);
         config.setMaxAge(3600L);
+
         var source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/api/**", config);
+        source.registerCorsConfiguration("/**", config);
         return source;
     }
 }
