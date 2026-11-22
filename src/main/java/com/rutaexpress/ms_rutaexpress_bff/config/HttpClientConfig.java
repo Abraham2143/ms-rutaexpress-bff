@@ -43,5 +43,21 @@ public class HttpClientConfig {
         factory.setReadTimeout(read);
         return RestClient.builder().baseUrl(url).requestFactory(factory).build();
     }
+
+    @Bean
+    RestClient analyticsRestClient(
+            @Value("${rutaexpress.analytics.base-url}") String url,
+            @Value("${rutaexpress.http.connect-timeout}") Duration connect,
+            @Value("${rutaexpress.http.read-timeout}") Duration read) {
+        return create(url, connect, read);
+    }
+
+    @Bean
+    RestClient kafkaAdminRestClient(
+            @Value("${rutaexpress.kafka-admin.base-url}") String url,
+            @Value("${rutaexpress.http.connect-timeout}") Duration connect,
+            @Value("${rutaexpress.http.read-timeout}") Duration read) {
+        return create(url, connect, read);
+    }
 }
 

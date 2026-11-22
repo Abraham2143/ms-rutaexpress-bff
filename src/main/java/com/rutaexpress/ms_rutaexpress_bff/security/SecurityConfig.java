@@ -48,6 +48,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/shipments", "/api/shipments/*")
                         .hasAnyRole("ADMIN", "DISPATCHER", "CLIENT", "AUDITOR")
 
+                        // Analytics & Audit (Kafka)
+                        .requestMatchers(HttpMethod.GET, "/api/analytics/**", "/api/kafka/**")
+                        .hasAnyRole("ADMIN", "AUDITOR", "DISPATCHER", "CLIENT")
+                        .requestMatchers(HttpMethod.POST, "/api/kafka/topics")
+                        .hasAnyRole("ADMIN", "AUDITOR")
+                        .requestMatchers(HttpMethod.DELETE, "/api/kafka/topics/*")
+                        .hasAnyRole("ADMIN", "AUDITOR")
+
                         .anyRequest().denyAll())
                 .oauth2ResourceServer(oauth -> oauth.jwt(jwt -> jwt.jwtAuthenticationConverter(roles)))
                 .build();
